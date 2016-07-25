@@ -16,14 +16,16 @@ type Data interface {
 	Fill(func([]byte) error) error
 
 	Read(io.Reader) ([]byte, error)
+
+	OnSorted([]byte) error
 }
 
 // see https://en.wikipedia.org/wiki/External_sorting#External_merge_sort
 // see http://faculty.simpson.edu/lydia.sinapova/www/cmsc250/LN250_Weiss/L17-ExternalSortEX2.htm
-func Sorted(data Data, memLimit int) (string, error) {
+func Sorted(data Data, memLimit int) error {
 	tmpDir, err := ioutil.TempDir("", "emsort")
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -72,13 +74,13 @@ func Sorted(data Data, memLimit int) (string, error) {
 		return nil
 	})
 	if fillErr != nil {
-		return "", fillErr
+		return fillErr
 	}
 
 	if memUsed > 0 {
 		flushErr := flush()
 		if flushErr != nil {
-			return "", flushErr
+			return flushErr
 		}
 	}
 
@@ -87,70 +89,74 @@ func Sorted(data Data, memLimit int) (string, error) {
 	for i := 0; i < numFiles; i++ {
 		file, err := os.OpenFile(filepath.Join(tmpDir, strconv.Itoa(i)), os.O_RDONLY, 0)
 		if err != nil {
-			return "", err
+			return err
 		}
 		defer file.Close()
 		files[i] = bufio.NewReaderSize(file, 65536)
 	}
 
 	perFileLimit := memLimit / (numFiles + 1)
-	for i := 0; i < numFiles; i++ {
-		file := files[i]
-		amountRead := 0
-		for {
-			b, err := data.Read(file)
-			if err == io.EOF {
-				delete(files, i)
-				break
-			}
-			if err != nil {
-				return "", err
-			}
-			amountRead += len(b)
-			heap.Push(&entries, &entry{i, b})
-			if amountRead >= perFileLimit {
-				break
+	fillBuffer := func() error {
+		for i := 0; i < len(files); i++ {
+			file := files[i]
+			amountRead := 0
+			for {
+				b, err := data.Read(file)
+				if err == io.EOF {
+					delete(files, i)
+					break
+				}
+				if err != nil {
+					return err
+				}
+				amountRead += len(b)
+				heap.Push(&entries, &entry{i, b})
+				if amountRead >= perFileLimit {
+					break
+				}
 			}
 		}
+
+		return nil
 	}
 
-	out, err := ioutil.TempFile("", "emsort_out")
+	err = fillBuffer()
 	if err != nil {
-		return "", err
+		return err
 	}
-	defer out.Close()
-	bout := bufio.NewWriterSize(out, 65536)
 
 	for {
 		if len(entries) == 0 {
+			err := fillBuffer()
+			if err != nil {
+				return err
+			}
+		}
+		if len(entries) == 0 {
+			// Nothing left with which to fill buffer, stop
 			break
 		}
 		_e := heap.Pop(&entries)
 		e := _e.(*entry)
-		_, writeErr := bout.Write(e.val)
+		writeErr := data.OnSorted(e.val)
 		if writeErr != nil {
-			return "", err
+			return err
 		}
 		file := files[e.fileIdx]
 		if file != nil {
 			b, err := data.Read(file)
 			if err == io.EOF {
 				delete(files, e.fileIdx)
-				break
+				continue
 			}
 			if err != nil {
-				return "", err
+				return err
 			}
 			heap.Push(&entries, &entry{e.fileIdx, b})
 		}
-
-		flushErr := bout.Flush()
-		if flushErr != nil {
-			return "", err
-		}
 	}
 
-	return out.Name(), nil
+	return nil
 }
 
 type inmemory [][]byte
