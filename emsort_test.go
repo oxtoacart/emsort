@@ -64,8 +64,3 @@ func (td *testData) Read(r io.Reader) ([]byte, error) {
 	_, err := io.ReadFull(r, b)
 	return b, err
 }
-
-func (td *testData) Write(w io.Writer, b []byte) error {
-	_, err := w.Write(b)
-	return err
-}

@@ -16,8 +16,6 @@ type Data interface {
 	Fill(func([]byte) error) error
 
 	Read(io.Reader) ([]byte, error)
-
-	Write(io.Writer, []byte) error
 }
 
 // see https://en.wikipedia.org/wiki/External_sorting#External_merge_sort
@@ -43,7 +41,7 @@ func Sorted(data Data, memLimit int) (string, error) {
 		memUsed = 0
 		out := bufio.NewWriterSize(file, 65536)
 		for _, val := range vals {
-			writeErr := data.Write(file, val)
+			_, writeErr := file.Write(val)
 			if writeErr != nil {
 				file.Close()
 				return writeErr
@@ -129,7 +127,7 @@ func Sorted(data Data, memLimit int) (string, error) {
 		}
 		_e := heap.Pop(&entries)
 		e := _e.(*entry)
-		writeErr := data.Write(bout, e.val)
+		_, writeErr := bout.Write(e.val)
 		if writeErr != nil {
 			return "", err
 		}
