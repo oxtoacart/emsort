@@ -1,6 +1,7 @@
 package emsort
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -42,6 +43,10 @@ func (td *testData) Read(r io.Reader) ([]byte, error) {
 	b := make([]byte, 8)
 	_, err := io.ReadFull(r, b)
 	return b, err
+}
+
+func (td *testData) Less(a []byte, b []byte) bool {
+	return bytes.Compare(a, b) < 0
 }
 
 func (td *testData) OnSorted(b []byte) error {

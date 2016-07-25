@@ -2,7 +2,6 @@ package emsort
 
 import (
 	"bufio"
-	"bytes"
 	"container/heap"
 	"io"
 	"io/ioutil"
@@ -16,6 +15,8 @@ type Data interface {
 	Fill(func([]byte) error) error
 
 	Read(io.Reader) ([]byte, error)
+
+	Less(a []byte, b []byte) bool
 
 	OnSorted([]byte) error
 }
@@ -31,10 +32,10 @@ func Sorted(data Data, memLimit int) error {
 
 	numFiles := 0
 	memUsed := 0
-	var vals inmemory
+	var vals [][]byte
 
 	flush := func() error {
-		sort.Sort(vals)
+		sort.Sort(&inmemory{vals, data.Less})
 		file, err := os.OpenFile(filepath.Join(tmpDir, strconv.Itoa(numFiles)), os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			return err
@@ -84,7 +85,7 @@ func Sorted(data Data, memLimit int) error {
 		}
 	}
 
-	var entries entryHeap
+	entries := &entryHeap{less: data.Less}
 	files := make(map[int]*bufio.Reader, numFiles)
 	for i := 0; i < numFiles; i++ {
 		file, err := os.OpenFile(filepath.Join(tmpDir, strconv.Itoa(i)), os.O_RDONLY, 0)
@@ -110,7 +111,7 @@ func Sorted(data Data, memLimit int) error {
 					return err
 				}
 				amountRead += len(b)
-				heap.Push(&entries, &entry{i, b})
+				heap.Push(entries, &entry{i, b})
 				if amountRead >= perFileLimit {
 					break
 				}
@@ -126,17 +127,17 @@ func Sorted(data Data, memLimit int) error {
 	}
 
 	for {
-		if len(entries) == 0 {
+		if len(entries.entries) == 0 {
 			err := fillBuffer()
 			if err != nil {
 				return err
 			}
 		}
-		if len(entries) == 0 {
+		if len(entries.entries) == 0 {
 			// Nothing left with which to fill buffer, stop
 			break
 		}
-		_e := heap.Pop(&entries)
+		_e := heap.Pop(entries)
 		e := _e.(*entry)
 		writeErr := data.OnSorted(e.val)
 		if writeErr != nil {
@@ -152,25 +153,28 @@ func Sorted(data Data, memLimit int) error {
 			if err != nil {
 				return err
 			}
-			heap.Push(&entries, &entry{e.fileIdx, b})
+			heap.Push(entries, &entry{e.fileIdx, b})
 		}
 	}
 
 	return nil
 }
 
-type inmemory [][]byte
-
-func (im inmemory) Len() int {
-	return len(im)
+type inmemory struct {
+	vals [][]byte
+	less func(a []byte, b []byte) bool
 }
 
-func (im inmemory) Less(i, j int) bool {
-	return bytes.Compare(im[i], im[j]) < 0
+func (im *inmemory) Len() int {
+	return len(im.vals)
 }
 
-func (im inmemory) Swap(i, j int) {
-	im[i], im[j] = im[j], im[i]
+func (im *inmemory) Less(i, j int) bool {
+	return im.less(im.vals[i], im.vals[j])
+}
+
+func (im *inmemory) Swap(i, j int) {
+	im.vals[i], im.vals[j] = im.vals[j], im.vals[i]
 }
 
 type entry struct {
@@ -178,28 +182,30 @@ type entry struct {
 	val     []byte
 }
 
-type entryHeap []*entry
-
-func (eh entryHeap) Len() int {
-	return len(eh)
+type entryHeap struct {
+	entries []*entry
+	less    func([]byte, []byte) bool
 }
 
-func (eh entryHeap) Less(i, j int) bool {
-	return bytes.Compare(eh[i].val, eh[j].val) < 0
+func (eh *entryHeap) Len() int {
+	return len(eh.entries)
 }
 
-func (eh entryHeap) Swap(i, j int) {
-	eh[i], eh[j] = eh[j], eh[i]
+func (eh *entryHeap) Less(i, j int) bool {
+	return eh.less(eh.entries[i].val, eh.entries[j].val)
+}
+
+func (eh *entryHeap) Swap(i, j int) {
+	eh.entries[i], eh.entries[j] = eh.entries[j], eh.entries[i]
 }
 
 func (eh *entryHeap) Push(x interface{}) {
-	*eh = append(*eh, x.(*entry))
+	eh.entries = append(eh.entries, x.(*entry))
 }
 
 func (eh *entryHeap) Pop() interface{} {
-	old := *eh
-	n := len(old)
-	x := old[n-1]
-	*eh = old[:n-1]
+	n := len(eh.entries)
+	x := eh.entries[n-1]
+	eh.entries = eh.entries[:n-1]
 	return x
 }
