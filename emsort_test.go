@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 	"testing"
@@ -23,17 +24,19 @@ func TestRoundTrip(t *testing.T) {
 		return
 	}
 	defer file.Close()
-	last := []byte{0}
-	next := []byte{0}
+	last := int64(0)
+	next := int64(0)
+	b := make([]byte, 8)
 	for {
-		_, err := file.Read(next)
+		_, err := io.ReadFull(file, b)
 		if err == io.EOF {
 			return
 		}
+		next = int64(binary.BigEndian.Uint64(b))
 		if !assert.NoError(t, err) {
 			return
 		}
-		if !assert.True(t, next[0] >= last[0], fmt.Sprintf("%d not greater than or equal to %d", next[0], last[0])) {
+		if !assert.True(t, next > last, fmt.Sprintf("%d not greater than or equal to %d", next, last)) {
 			return
 		}
 		last = next
@@ -44,9 +47,10 @@ type testData struct {
 }
 
 func (td *testData) Fill(fn func([]byte) error) error {
+	halfMaxInt := int64(math.MaxInt64 / 2)
 	for i := 0; i < 10000; i++ {
 		b := make([]byte, 8)
-		binary.LittleEndian.PutUint64(b, uint64(rand.Int63()))
+		binary.BigEndian.PutUint64(b, uint64(halfMaxInt+(rand.Int63n(halfMaxInt))))
 		err := fn(b)
 		if err != nil {
 			return err
@@ -64,8 +68,4 @@ func (td *testData) Read(r io.Reader) ([]byte, error) {
 func (td *testData) Write(w io.Writer, b []byte) error {
 	_, err := w.Write(b)
 	return err
-}
-
-func (td *testData) Less(a, b []byte) bool {
-	return binary.LittleEndian.Uint64(a) < binary.LittleEndian.Uint64(b)
 }
