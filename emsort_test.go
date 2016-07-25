@@ -43,11 +43,9 @@ func TestRoundTrip(t *testing.T) {
 type testData struct {
 }
 
-func (td *testData) Fill(fn func([]byte) error) error {
+func (td *testData) Fill(fn func(interface{}) error) error {
 	for i := 0; i < 10000; i++ {
-		b := make([]byte, 8)
-		binary.LittleEndian.PutUint64(b, uint64(rand.Int63()))
-		err := fn(b)
+		err := fn(rand.Int63())
 		if err != nil {
 			return err
 		}
@@ -55,17 +53,26 @@ func (td *testData) Fill(fn func([]byte) error) error {
 	return nil
 }
 
-func (td *testData) Read(r io.Reader) ([]byte, error) {
-	b := make([]byte, 8)
-	_, err := io.ReadFull(r, b)
-	return b, err
+func (td *testData) Size(v interface{}) int {
+	return 8
 }
 
-func (td *testData) Write(w io.Writer, b []byte) error {
+func (td *testData) Read(r io.Reader) (interface{}, error) {
+	b := make([]byte, 8)
+	_, err := io.ReadFull(r, b)
+	if err != nil {
+		return nil, err
+	}
+	return int64(binary.LittleEndian.Uint64(b)), nil
+}
+
+func (td *testData) Write(w io.Writer, v interface{}) error {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, uint64(v.(int64)))
 	_, err := w.Write(b)
 	return err
 }
 
-func (td *testData) Less(a, b []byte) bool {
-	return binary.LittleEndian.Uint64(a) < binary.LittleEndian.Uint64(b)
+func (td *testData) Less(a, b interface{}) bool {
+	return a.(int64) < b.(int64)
 }

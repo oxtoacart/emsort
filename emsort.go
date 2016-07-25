@@ -12,13 +12,15 @@ import (
 )
 
 type Data interface {
-	Fill(func([]byte) error) error
+	Fill(func(interface{}) error) error
 
-	Read(io.Reader) ([]byte, error)
+	Size(interface{}) int
 
-	Write(io.Writer, []byte) error
+	Read(io.Reader) (interface{}, error)
 
-	Less(a, b []byte) bool
+	Write(io.Writer, interface{}) error
+
+	Less(a, b interface{}) bool
 }
 
 // see https://en.wikipedia.org/wiki/External_sorting#External_merge_sort
@@ -32,7 +34,7 @@ func Sorted(data Data, memLimit int) (string, error) {
 
 	numFiles := 0
 	memUsed := 0
-	var vals [][]byte
+	var vals []interface{}
 
 	flush := func() error {
 		sort.Sort(&inmemory{vals, data.Less})
@@ -63,8 +65,8 @@ func Sorted(data Data, memLimit int) (string, error) {
 		return nil
 	}
 
-	fillErr := data.Fill(func(b []byte) error {
-		memUsed += len(b)
+	fillErr := data.Fill(func(val interface{}) error {
+		memUsed += data.Size(val)
 		if memUsed >= memLimit {
 			flushErr := flush()
 			if flushErr != nil {
@@ -100,7 +102,7 @@ func Sorted(data Data, memLimit int) (string, error) {
 		file := files[i]
 		amountRead := 0
 		for {
-			b, err := data.Read(file)
+			v, err := data.Read(file)
 			if err == io.EOF {
 				delete(files, i)
 				break
@@ -108,8 +110,8 @@ func Sorted(data Data, memLimit int) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			amountRead += len(b)
-			heap.Push(entries, &entry{i, b})
+			amountRead += data.Size(v)
+			heap.Push(entries, &entry{i, v})
 			if amountRead >= perFileLimit {
 				break
 			}
@@ -156,8 +158,8 @@ func Sorted(data Data, memLimit int) (string, error) {
 }
 
 type inmemory struct {
-	vals [][]byte
-	less func(a, b []byte) bool
+	vals []interface{}
+	less func(a, b interface{}) bool
 }
 
 func (im *inmemory) Len() int {
@@ -174,12 +176,12 @@ func (im *inmemory) Swap(i, j int) {
 
 type entry struct {
 	fileIdx int
-	val     []byte
+	val     interface{}
 }
 
 type entryHeap struct {
 	entries []*entry
-	less    func(a, b []byte) bool
+	less    func(a, b interface{}) bool
 }
 
 func (eh *entryHeap) Len() int {
