@@ -1,8 +1,11 @@
+// see https://en.wikipedia.org/wiki/External_sorting#External_merge_sort
+// see http://faculty.simpson.edu/lydia.sinapova/www/cmsc250/LN250_Weiss/L17-ExternalSortEX2.htm
 package emsort
 
 import (
 	"bufio"
 	"container/heap"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -21,94 +24,123 @@ type Data interface {
 	OnSorted([]byte) error
 }
 
-// see https://en.wikipedia.org/wiki/External_sorting#External_merge_sort
-// see http://faculty.simpson.edu/lydia.sinapova/www/cmsc250/LN250_Weiss/L17-ExternalSortEX2.htm
-func Sorted(data Data, memLimit int) error {
+// SortedWriter is an io.WriteCloser that sorts its output on writing. Each
+// []byte passed to the Write method is treated as a single item to sort.
+type SortedWriter interface {
+	Write(b []byte) (int, error)
+
+	Close() error
+}
+
+// Less is a function that compares two byte arrays and determines whether a is
+// less than b.
+type Less func(a []byte, b []byte) bool
+
+// Chunk is a function that chunks data read from the given io.Reader into items
+// for sorting.
+type Chunk func(io.Reader) ([]byte, error)
+
+func New(out io.Writer, chunk Chunk, less Less, memLimit int) (SortedWriter, error) {
 	tmpDir, err := ioutil.TempDir("", "emsort")
+	if err != nil {
+		return nil, err
+	}
+
+	return &sorted{
+		tmpDir:   tmpDir,
+		out:      out,
+		chunk:    chunk,
+		less:     less,
+		memLimit: memLimit,
+	}, nil
+}
+
+type sorted struct {
+	tmpDir   string
+	out      io.Writer
+	chunk    Chunk
+	less     Less
+	memLimit int
+	memUsed  int
+	numFiles int
+	vals     [][]byte
+}
+
+func (s *sorted) Write(b []byte) (int, error) {
+	s.vals = append(s.vals, b)
+	s.memUsed += len(b)
+	if s.memUsed >= s.memLimit {
+		flushErr := s.flush()
+		if flushErr != nil {
+			return 0, flushErr
+		}
+	}
+	return len(b), nil
+}
+
+func (s *sorted) flush() error {
+	sort.Sort(&inmemory{s.vals, s.less})
+	file, err := os.OpenFile(filepath.Join(s.tmpDir, strconv.Itoa(s.numFiles)), os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
-
-	numFiles := 0
-	memUsed := 0
-	var vals [][]byte
-
-	flush := func() error {
-		sort.Sort(&inmemory{vals, data.Less})
-		file, err := os.OpenFile(filepath.Join(tmpDir, strconv.Itoa(numFiles)), os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
-		}
-		numFiles++
-		memUsed = 0
-		out := bufio.NewWriterSize(file, 65536)
-		for _, val := range vals {
-			_, writeErr := file.Write(val)
-			if writeErr != nil {
-				file.Close()
-				return writeErr
-			}
-		}
-		err = out.Flush()
-		if err != nil {
+	s.numFiles++
+	s.memUsed = 0
+	out := bufio.NewWriterSize(file, 65536)
+	for _, val := range s.vals {
+		_, writeErr := file.Write(val)
+		if writeErr != nil {
 			file.Close()
-			return err
+			return writeErr
 		}
-		closeErr := file.Close()
-		if closeErr != nil {
-			return closeErr
-		}
-		vals = vals[:0]
-		return nil
 	}
-
-	fillErr := data.Fill(func(b []byte) error {
-		vals = append(vals, b)
-		memUsed += len(b)
-		if memUsed >= memLimit {
-			flushErr := flush()
-			if flushErr != nil {
-				return flushErr
-			}
-		}
-		return nil
-	})
-	if fillErr != nil {
-		return fillErr
+	err = out.Flush()
+	if err != nil {
+		file.Close()
+		return err
 	}
+	closeErr := file.Close()
+	if closeErr != nil {
+		return closeErr
+	}
+	s.vals = s.vals[:0]
+	return nil
+}
 
-	if memUsed > 0 {
-		flushErr := flush()
+func (s *sorted) Close() error {
+	defer os.RemoveAll(s.tmpDir)
+
+	if s.memUsed > 0 {
+		flushErr := s.flush()
 		if flushErr != nil {
 			return flushErr
 		}
 	}
 
-	entries := &entryHeap{less: data.Less}
-	files := make(map[int]*bufio.Reader, numFiles)
-	for i := 0; i < numFiles; i++ {
-		file, err := os.OpenFile(filepath.Join(tmpDir, strconv.Itoa(i)), os.O_RDONLY, 0)
+	entries := &entryHeap{less: s.less}
+	files := make(map[int]*bufio.Reader, s.numFiles)
+	for i := 0; i < s.numFiles; i++ {
+		file, err := os.OpenFile(filepath.Join(s.tmpDir, strconv.Itoa(i)), os.O_RDONLY, 0)
 		if err != nil {
-			return err
+			return fmt.Errorf("Unable to open temp file: %v", err)
 		}
 		defer file.Close()
 		files[i] = bufio.NewReaderSize(file, 65536)
 	}
 
-	perFileLimit := memLimit / (numFiles + 1)
+	perFileLimit := s.memLimit / (s.numFiles + 1)
 	fillBuffer := func() error {
 		for i := 0; i < len(files); i++ {
 			file := files[i]
 			amountRead := 0
 			for {
-				b, err := data.Read(file)
+				b, err := s.chunk(file)
 				if err == io.EOF {
 					delete(files, i)
 					break
 				}
 				if err != nil {
-					return err
+					return fmt.Errorf("Error filling buffer: %v", err)
 				}
 				amountRead += len(b)
 				heap.Push(entries, &entry{i, b})
@@ -121,16 +153,11 @@ func Sorted(data Data, memLimit int) error {
 		return nil
 	}
 
-	err = fillBuffer()
-	if err != nil {
-		return err
-	}
-
 	for {
 		if len(entries.entries) == 0 {
-			err := fillBuffer()
-			if err != nil {
-				return err
+			fillErr := fillBuffer()
+			if fillErr != nil {
+				return fillErr
 			}
 		}
 		if len(entries.entries) == 0 {
@@ -139,25 +166,30 @@ func Sorted(data Data, memLimit int) error {
 		}
 		_e := heap.Pop(entries)
 		e := _e.(*entry)
-		writeErr := data.OnSorted(e.val)
+		_, writeErr := s.out.Write(e.val)
 		if writeErr != nil {
-			return err
+			return fmt.Errorf("Error writing to final output: %v", writeErr)
 		}
 		file := files[e.fileIdx]
 		if file != nil {
-			b, err := data.Read(file)
+			b, err := s.chunk(file)
 			if err == io.EOF {
 				delete(files, e.fileIdx)
 				continue
 			}
 			if err != nil {
-				return err
+				return fmt.Errorf("Error replacing entry on heap: %v", err)
 			}
 			heap.Push(entries, &entry{e.fileIdx, b})
 		}
 	}
 
-	return nil
+	switch c := s.out.(type) {
+	case io.Closer:
+		return c.Close()
+	default:
+		return nil
+	}
 }
 
 type inmemory struct {
