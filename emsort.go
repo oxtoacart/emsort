@@ -25,7 +25,8 @@ type Data interface {
 }
 
 // SortedWriter is an io.WriteCloser that sorts its output on writing. Each
-// []byte passed to the Write method is treated as a single item to sort.
+// []byte passed to the Write method is treated as a single item to sort. Since
+// these []byte are kept in memory, they must not be pooled/shared!
 type SortedWriter interface {
 	Write(b []byte) (int, error)
 
