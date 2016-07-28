@@ -1,3 +1,6 @@
+// Package emsort provides a facility for performing disk-based external
+// merge sorts.
+//
 // see https://en.wikipedia.org/wiki/External_sorting#External_merge_sort
 // see http://faculty.simpson.edu/lydia.sinapova/www/cmsc250/LN250_Weiss/L17-ExternalSortEX2.htm
 package emsort
@@ -14,22 +17,14 @@ import (
 	"strconv"
 )
 
-type Data interface {
-	Fill(func([]byte) error) error
-
-	Read(io.Reader) ([]byte, error)
-
-	Less(a []byte, b []byte) bool
-
-	OnSorted([]byte) error
-}
-
 // SortedWriter is an io.WriteCloser that sorts its output on writing. Each
 // []byte passed to the Write method is treated as a single item to sort. Since
 // these []byte are kept in memory, they must not be pooled/shared!
 type SortedWriter interface {
 	Write(b []byte) (int, error)
 
+	// Close implements the method from io.Closer. It's important to call this
+	// because this is where the final sorting happens.
 	Close() error
 }
 
@@ -41,6 +36,9 @@ type Less func(a []byte, b []byte) bool
 // for sorting.
 type Chunk func(io.Reader) ([]byte, error)
 
+// New constructs a new SortedWriter that wraps out, chunks data into sortable
+// items using the given Chunk, compares them using the given Less and limits
+// the amount of RAM used to approximately memLimit.
 func New(out io.Writer, chunk Chunk, less Less, memLimit int) (SortedWriter, error) {
 	tmpDir, err := ioutil.TempDir("", "emsort")
 	if err != nil {
