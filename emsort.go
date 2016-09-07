@@ -87,7 +87,7 @@ func (s *sorted) flush() error {
 	s.memUsed = 0
 	out := bufio.NewWriterSize(file, 65536)
 	for _, val := range s.vals {
-		_, writeErr := file.Write(val)
+		_, writeErr := out.Write(val)
 		if writeErr != nil {
 			file.Close()
 			return writeErr
