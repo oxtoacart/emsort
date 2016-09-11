@@ -102,7 +102,7 @@ func (s *sorted) flush() error {
 	if closeErr != nil {
 		return closeErr
 	}
-	s.vals = s.vals[:0]
+	s.vals = make([][]byte, 0, len(s.vals))
 	return nil
 }
 
@@ -115,6 +115,9 @@ func (s *sorted) Close() error {
 			return flushErr
 		}
 	}
+
+	// Free memory used by last read vals
+	s.vals = nil
 
 	entries := &entryHeap{less: s.less}
 	files := make(map[int]*bufio.Reader, s.numFiles)
