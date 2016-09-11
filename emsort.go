@@ -119,7 +119,6 @@ func (s *sorted) Close() error {
 	// Free memory used by last read vals
 	s.vals = nil
 
-	entries := &entryHeap{less: s.less}
 	files := make(map[int]*bufio.Reader, s.numFiles)
 	for i := 0; i < s.numFiles; i++ {
 		file, err := os.OpenFile(filepath.Join(s.tmpDir, strconv.Itoa(i)), os.O_RDONLY, 0)
@@ -130,6 +129,31 @@ func (s *sorted) Close() error {
 		files[i] = bufio.NewReaderSize(file, 65536)
 	}
 
+	if s.numFiles == 1 {
+		// No need to do further sorting
+		_, copyErr := io.Copy(s.out, files[0])
+		if copyErr != nil {
+			return fmt.Errorf("Unable to copy sorted data to output: %v", copyErr)
+		}
+	} else {
+		// Need to perform final sort across intermediary files
+		finalSortErr := s.finalSort(files)
+		if finalSortErr != nil {
+			return finalSortErr
+		}
+	}
+
+	switch c := s.out.(type) {
+	case io.Closer:
+		return c.Close()
+	default:
+		return nil
+	}
+}
+
+func (s *sorted) finalSort(files map[int]*bufio.Reader) error {
+
+	entries := &entryHeap{less: s.less}
 	perFileLimit := s.memLimit / (s.numFiles + 1)
 	fillBuffer := func() error {
 		for i := 0; i < len(files); i++ {
@@ -186,12 +210,7 @@ func (s *sorted) Close() error {
 		}
 	}
 
-	switch c := s.out.(type) {
-	case io.Closer:
-		return c.Close()
-	default:
-		return nil
-	}
+	return nil
 }
 
 type inmemory struct {

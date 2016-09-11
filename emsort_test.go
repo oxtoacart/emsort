@@ -3,7 +3,6 @@ package emsort
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -13,9 +12,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRoundTrip(t *testing.T) {
-	w := &assertingWriter{t: t}
+func TestRoundTripMultipleFiles(t *testing.T) {
+	w := &assertingWriter{&bytes.Buffer{}}
 	s, err := New(w, chunk, less, 1000)
+	doTestRoundTrip(t, w, s, err)
+}
+
+func TestRoundTripSingleFile(t *testing.T) {
+	w := &assertingWriter{&bytes.Buffer{}}
+	s, err := New(w, chunk, less, 100000000)
+	doTestRoundTrip(t, w, s, err)
+}
+
+func doTestRoundTrip(t *testing.T, w *assertingWriter, s SortedWriter, err error) {
 	if assert.NoError(t, err) {
 		halfMaxInt := int64(math.MaxInt64 / 2)
 		for i := 0; i < 100000; i++ {
@@ -31,7 +40,7 @@ func TestRoundTrip(t *testing.T) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		assert.Equal(t, 100000, w.numResults)
+		w.finish(t)
 	}
 }
 
@@ -46,17 +55,30 @@ func less(a []byte, b []byte) bool {
 }
 
 type assertingWriter struct {
-	t          *testing.T
-	last       int64
-	numResults int
+	buf *bytes.Buffer
 }
 
 func (w *assertingWriter) Write(b []byte) (int, error) {
-	next := int64(binary.BigEndian.Uint64(b))
-	if !assert.True(w.t, next > w.last, fmt.Sprintf("%d not greater than or equal to %d", next, w.last)) {
-		return 0, errors.New("Assertion failed")
+	return w.buf.Write(b)
+}
+
+func (w *assertingWriter) finish(t *testing.T) {
+	last := int64(-1)
+	numResults := 0
+	for {
+		var next int64
+		err := binary.Read(w.buf, binary.BigEndian, &next)
+		if err == io.EOF {
+			break
+		}
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.True(t, next > last, fmt.Sprintf("%d not greater than or equal to %d", next, last)) {
+			return
+		}
+		last = next
+		numResults++
 	}
-	w.last = next
-	w.numResults++
-	return len(b), nil
+	assert.Equal(t, 100000, numResults)
 }
